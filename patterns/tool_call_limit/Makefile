@@ -1,67 +1,103 @@
-.PHONY: all format lint test tests test_watch integration_tests docker_tests help extended_tests
+.PHONY: all install dev test lint format clean help run examples
 
-# Default target executed when no arguments are given to make.
+# Default target
 all: help
 
-# Define a variable for the test file path.
-TEST_FILE ?= tests/unit_tests/
+# Installation targets
+install:
+	pip install -e .
 
+install-dev:
+	pip install -e ".[dev]" "langgraph-cli[inmem]"
+
+install-llm:
+	pip install -e ".[llm]"
+
+# Testing targets
 test:
-	python -m pytest $(TEST_FILE)
+	python -m pytest tests/ -v
 
-integration_tests:
-	python -m pytest tests/integration_tests 
+test-unit:
+	python -m pytest tests/unit_tests/ -v
 
-test_watch:
-	python -m ptw --snapshot-update --now . -- -vv tests/unit_tests
+test-integration:
+	python -m pytest tests/integration_tests/ -v
 
-test_profile:
-	python -m pytest -vv tests/unit_tests/ --profile-svg
+test-cov:
+	python -m pytest tests/ --cov=src/agent --cov-report=html --cov-report=term
 
-extended_tests:
-	python -m pytest --only-extended $(TEST_FILE)
+test-watch:
+	python -m pytest-watch tests/
 
+# Linting and formatting
+lint:
+	python -m ruff check src/ tests/
+	python -m mypy src/
 
-######################
-# LINTING AND FORMATTING
-######################
+format:
+	python -m ruff format src/ tests/ examples.py
+	python -m ruff check --fix src/ tests/ examples.py
 
-# Define a variable for Python and notebook files.
-PYTHON_FILES=src/
-MYPY_CACHE=.mypy_cache
-lint format: PYTHON_FILES=.
-lint_diff format_diff: PYTHON_FILES=$(shell git diff --name-only --diff-filter=d main | grep -E '\.py$$|\.ipynb$$')
-lint_package: PYTHON_FILES=src
-lint_tests: PYTHON_FILES=tests
-lint_tests: MYPY_CACHE=.mypy_cache_test
+# Running the agent
+run:
+	langgraph dev
 
-lint lint_diff lint_package lint_tests:
-	python -m ruff check .
-	[ "$(PYTHON_FILES)" = "" ] || python -m ruff format $(PYTHON_FILES) --diff
-	[ "$(PYTHON_FILES)" = "" ] || python -m ruff check --select I $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || python -m mypy --strict $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && python -m mypy --strict $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
+examples:
+	python examples.py
 
-format format_diff:
-	ruff format $(PYTHON_FILES)
-	ruff check --select I --fix $(PYTHON_FILES)
+# Cleaning
+clean:
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d -name "*.egg-info" -exec rm -rf {} +
+	find . -type d -name ".pytest_cache" -exec rm -rf {} +
+	find . -type d -name ".ruff_cache" -exec rm -rf {} +
+	find . -type d -name ".mypy_cache" -exec rm -rf {} +
+	find . -type d -name "htmlcov" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
+	find . -type f -name ".coverage" -delete
+	rm -rf dist/ build/
 
-spell_check:
-	codespell --toml pyproject.toml
+# Documentation
+docs:
+	@echo "Opening documentation..."
+	@echo "README: ./README.md"
+	@echo "Architecture: ./docs/ARCHITECTURE.md"
 
-spell_fix:
-	codespell --toml pyproject.toml -w
+# Docker targets
+docker-build:
+	docker build -t tool-call-agent .
 
-######################
-# HELP
-######################
+docker-run:
+	docker run -p 8000:8000 --env-file .env tool-call-agent
 
+# Help
 help:
-	@echo '----'
-	@echo 'format                       - run code formatters'
-	@echo 'lint                         - run linters'
-	@echo 'test                         - run unit tests'
-	@echo 'tests                        - run unit tests'
-	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
-	@echo 'test_watch                   - run unit tests in watch mode'
-
+	@echo "Tool Call Agent - Available Commands"
+	@echo "===================================="
+	@echo ""
+	@echo "Installation:"
+	@echo "  make install          - Install package"
+	@echo "  make install-dev      - Install with dev dependencies"
+	@echo "  make install-llm      - Install with LLM provider support"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test            - Run all tests"
+	@echo "  make test-unit       - Run unit tests only"
+	@echo "  make test-integration - Run integration tests only"
+	@echo "  make test-cov        - Run tests with coverage report"
+	@echo "  make test-watch      - Run tests in watch mode"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make lint            - Run linters (ruff, mypy)"
+	@echo "  make format          - Format code with ruff"
+	@echo ""
+	@echo "Running:"
+	@echo "  make run             - Start LangGraph dev server"
+	@echo "  make examples        - Run example usage scripts"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  make clean           - Remove build artifacts and caches"
+	@echo "  make docs            - View documentation"
+	@echo "  make docker-build    - Build Docker image"
+	@echo "  make docker-run      - Run in Docker container"
+	@echo ""
