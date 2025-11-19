@@ -13,7 +13,7 @@ import logging
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Annotated, Any, Literal, Sequence
 
@@ -24,12 +24,23 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
-# Configure structured logging
+
+# Configure structured logging with custom formatter
+class TraceIdFilter(logging.Filter):
+    """Add trace_id to log records if not present."""
+
+    def filter(self, record):
+        if not hasattr(record, "trace_id"):
+            record.trace_id = "N/A"
+        return True
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - [%(trace_id)s] - %(message)s",
 )
 logger = logging.getLogger(__name__)
+logger.addFilter(TraceIdFilter())
 
 
 # ============================================================================
@@ -71,15 +82,40 @@ class GuardrailMetrics:
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     violations: list[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GuardrailMetrics":
+        """Create from dict for deserialization."""
+        return cls(**data)
+
 
 class AgentState(TypedDict):
     """State for the agent with guardrail tracking."""
 
     messages: Annotated[Sequence[BaseMessage], add_messages]
-    guardrail_metrics: GuardrailMetrics
+    guardrail_metrics: dict[str, Any]  # Changed to dict for LangGraph compatibility
     config: GuardrailConfig
     needs_human_review: bool
     human_review_reason: str
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+def get_metrics(state: AgentState) -> GuardrailMetrics:
+    """Extract metrics from state, handling both dict and object formats."""
+    metrics_data = state["guardrail_metrics"]
+    if isinstance(metrics_data, dict):
+        return GuardrailMetrics.from_dict(metrics_data)
+    return metrics_data
+
+
+def update_metrics(state: AgentState, metrics: GuardrailMetrics) -> dict[str, Any]:
+    """Update state with new metrics."""
+    return {"guardrail_metrics": metrics.to_dict()}
 
 
 # ============================================================================
@@ -140,7 +176,7 @@ tool_node = ToolNode(TOOLS)
 # GUARDRAIL FUNCTIONS
 # ============================================================================
 def calculate_backoff_delay(
-        retry_count: int, base_delay: float, max_delay: float
+    retry_count: int, base_delay: float, max_delay: float
 ) -> float:
     """Calculate exponential backoff with jitter.
 
@@ -152,7 +188,7 @@ def calculate_backoff_delay(
     Returns:
         Delay in seconds with jitter applied
     """
-    exponential_delay = base_delay * (2 ** retry_count)
+    exponential_delay = base_delay * (2**retry_count)
     capped_delay = min(exponential_delay, max_delay)
     jitter = random.uniform(0, capped_delay * 0.1)  # 10% jitter
     return capped_delay + jitter
@@ -167,7 +203,7 @@ def check_guardrails(state: AgentState) -> dict[str, Any]:
     Returns:
         Updated state with guardrail status
     """
-    metrics = state["guardrail_metrics"]
+    metrics = get_metrics(state)
     config = state.get("config", DEFAULT_GUARDRAILS)
 
     trace_id = metrics.trace_id
@@ -196,7 +232,7 @@ def check_guardrails(state: AgentState) -> dict[str, Any]:
     needs_review = len(violations) > 0 and config.get("enable_human_review", True)
 
     return {
-        "guardrail_metrics": metrics,
+        "guardrail_metrics": metrics.to_dict(),
         "needs_human_review": needs_review,
         "human_review_reason": "; ".join(violations) if violations else "",
     }
@@ -210,7 +246,7 @@ def call_model(state: AgentState) -> dict[str, Any]:
 
     In production, replace with actual LLM integration.
     """
-    metrics = state["guardrail_metrics"]
+    metrics = get_metrics(state)
     messages = state["messages"]
 
     logger.info(
@@ -252,7 +288,7 @@ def call_model(state: AgentState) -> dict[str, Any]:
 
     return {
         "messages": [response],
-        "guardrail_metrics": metrics,
+        "guardrail_metrics": metrics.to_dict(),
     }
 
 
@@ -265,7 +301,7 @@ def execute_tools(state: AgentState) -> dict[str, Any]:
     Returns:
         Updated state with tool results
     """
-    metrics = state["guardrail_metrics"]
+    metrics = get_metrics(state)
     config = state.get("config", DEFAULT_GUARDRAILS)
     messages = state["messages"]
     last_message = messages[-1]
@@ -304,7 +340,7 @@ def execute_tools(state: AgentState) -> dict[str, Any]:
 
     return {
         "messages": result["messages"],
-        "guardrail_metrics": metrics,
+        "guardrail_metrics": metrics.to_dict(),
     }
 
 
@@ -317,7 +353,7 @@ def human_review(state: AgentState) -> dict[str, Any]:
     Returns:
         State with human review message
     """
-    metrics = state["guardrail_metrics"]
+    metrics = get_metrics(state)
     reason = state.get("human_review_reason", "Unknown violation")
 
     logger.warning(
@@ -354,7 +390,7 @@ Options: approve, reject, or modify the request.
 # ROUTING LOGIC
 # ============================================================================
 def should_continue(
-        state: AgentState,
+    state: AgentState,
 ) -> Literal["execute_tools", "check_guardrails", "end"]:
     """Determine next step based on the last message.
 
@@ -366,7 +402,7 @@ def should_continue(
     """
     messages = state["messages"]
     last_message = messages[-1]
-    metrics = state["guardrail_metrics"]
+    metrics = get_metrics(state)
 
     logger.debug(
         f"Routing decision. Last message type: {type(last_message).__name__}",
@@ -382,7 +418,7 @@ def should_continue(
 
 
 def check_guardrails_routing(
-        state: AgentState,
+    state: AgentState,
 ) -> Literal["human_review", "call_model"]:
     """Route to human review if guardrails violated, otherwise continue.
 
