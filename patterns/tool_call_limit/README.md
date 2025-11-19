@@ -20,6 +20,7 @@ if tool_calls > 3 or tokens_per_min > 15000:
 ```
 
 **4 Key Guardrails:**
+
 1. ✅ Hard cap: Max 3 tool calls per turn
 2. ✅ Token limit: 15,000 tokens/minute
 3. ✅ Exponential backoff with jitter
@@ -55,6 +56,7 @@ graph TD
 ### Installation
 
 #### Env Setup
+
 copy `.env.example` to `.env` and update values
 
 #### Install dependencies
@@ -67,6 +69,7 @@ pip install -e '.[dev,llm]'
 ```
 
 ##### Start the server
+
 ```bash
 langgraph dev
 ```
@@ -233,12 +236,12 @@ Default guardrail limits:
 
 ```python
 {
-    "max_tool_calls_per_turn": 3,      # Stop after 3 tool calls
-    "max_tokens_per_minute": 15000,    # Token budget
-    "enable_exponential_backoff": True, # Smart retries
-    "base_retry_delay": 1.0,           # 1 second base
-    "max_retry_delay": 30.0,           # 30 second max
-    "enable_human_review": True        # Escalate violations
+    "max_tool_calls_per_turn": 3,  # Stop after 3 tool calls
+    "max_tokens_per_minute": 15000,  # Token budget
+    "enable_exponential_backoff": True,  # Smart retries
+    "base_retry_delay": 1.0,  # 1 second base
+    "max_retry_delay": 30.0,  # 30 second max
+    "enable_human_review": True  # Escalate violations
 }
 ```
 
@@ -251,18 +254,19 @@ def check_guardrails(state: AgentState) -> dict[str, Any]:
     metrics = get_metrics(state)
     config = state.get("config", DEFAULT_GUARDRAILS)
     violations = []
-    
+
     # Check tool call limit
     if metrics.tool_calls_this_turn >= config["max_tool_calls_per_turn"]:
-        violations.append(f"Tool call limit exceeded: {metrics.tool_calls_this_turn}/{config['max_tool_calls_per_turn']}")
-    
+        violations.append(
+            f"Tool call limit exceeded: {metrics.tool_calls_this_turn}/{config['max_tool_calls_per_turn']}")
+
     # Check token limit
     if metrics.tokens_last_minute > config["max_tokens_per_minute"]:
         violations.append(f"Token rate limit exceeded: {metrics.tokens_last_minute}/{config['max_tokens_per_minute']}")
-    
+
     # Escalate if violations
     needs_review = len(violations) > 0 and config.get("enable_human_review", True)
-    
+
     return {
         "guardrail_metrics": metrics.to_dict(),
         "needs_human_review": needs_review,
@@ -345,6 +349,7 @@ langgraph dev
 ## Contributing
 
 This is a learning resource. Feel free to:
+
 - Fork and customize
 - Submit improvements
 - Share your patterns
