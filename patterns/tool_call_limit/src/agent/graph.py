@@ -248,6 +248,7 @@ def call_model(state: AgentState) -> dict[str, Any]:
     """
     metrics = get_metrics(state)
     messages = state["messages"]
+    config = state.get("config", DEFAULT_GUARDRAILS)
 
     logger.info(
         f"Calling model with {len(messages)} messages",
@@ -262,27 +263,42 @@ def call_model(state: AgentState) -> dict[str, Any]:
     estimated_tokens = len(str(last_message.content)) * 2
     metrics.tokens_last_minute += estimated_tokens
 
-    # Create a mock AI response
-    # If we've already made tool calls, return a final answer
-    if metrics.tool_calls_this_turn > 0:
+    # Determine if we should make more tool calls or provide a final answer
+    # In a real LLM, this would be based on the model's reasoning
+    should_call_tools = _should_generate_tool_calls(
+        messages, metrics, config
+    )
+
+    if should_call_tools:
+        # Simulate tool calling - can generate 1-2 tool calls per turn
+        num_tools_to_call = min(
+            random.randint(1, 2),
+            config["max_tool_calls_per_turn"] - metrics.tool_calls_this_turn
+        )
+
+        tool_calls = []
+        for i in range(num_tools_to_call):
+            # Randomly pick a tool to simulate realistic behavior
+            tool_name = random.choice(["search_web", "calculate", "get_current_time"])
+            tool_calls.append({
+                "name": tool_name,
+                "args": _generate_tool_args(tool_name, i),
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+            })
+
+        response = AIMessage(
+            content="",
+            tool_calls=tool_calls,
+        )
+    else:
+        # Provide final answer
         response = AIMessage(
             content="Based on the tool results, here's my answer: [Final answer would go here]"
         )
-    else:
-        # Simulate tool calling
-        response = AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "search_web",
-                    "args": {"query": "example query"},
-                    "id": f"call_{uuid.uuid4().hex[:8]}",
-                }
-            ],
-        )
 
     logger.info(
-        f"Model response generated. Has tool calls: {bool(response.tool_calls)}",
+        f"Model response generated. Has tool calls: {bool(getattr(response, 'tool_calls', None))}, "
+        f"Num tool calls: {len(getattr(response, 'tool_calls', []))}",
         extra={"trace_id": metrics.trace_id},
     )
 
@@ -290,6 +306,85 @@ def call_model(state: AgentState) -> dict[str, Any]:
         "messages": [response],
         "guardrail_metrics": metrics.to_dict(),
     }
+
+
+def _should_generate_tool_calls(
+    messages: Sequence[BaseMessage],
+    metrics: GuardrailMetrics,
+    config: GuardrailConfig
+) -> bool:
+    """Determine if the model should generate tool calls.
+
+    This simulates the LLM's decision-making process. In production,
+    the actual LLM would make this decision based on the conversation context.
+
+    The agent tries to make multiple calls to gather information, but stops
+    naturally after a reasonable amount. The guardrails kick in if the agent
+    tries to exceed the configured limits.
+
+    Args:
+        messages: Conversation history
+        metrics: Current guardrail metrics
+        config: Guardrail configuration
+
+    Returns:
+        True if should generate tool calls, False if should provide final answer
+    """
+    # Don't make tool calls if we've hit or exceeded the limit
+    if metrics.tool_calls_this_turn >= config["max_tool_calls_per_turn"]:
+        return False
+
+    # Check if we have any tool messages (results from previous tool calls)
+    has_tool_results = any(isinstance(msg, ToolMessage) for msg in messages)
+
+    # Simulate realistic agent behavior:
+    # - The agent wants to make 2-3 tool calls typically
+    # - It stops naturally after gathering sufficient information
+    # - Guardrails prevent it if it tries to exceed the limit
+
+    if not has_tool_results:
+        # First turn - always gather information
+        return True
+    elif metrics.tool_calls_this_turn < 2:
+        # Made 1 call - usually wants more information
+        # 80% chance to continue
+        return random.random() < 0.8
+    elif metrics.tool_calls_this_turn < 3:
+        # Made 2 calls - sometimes wants one more
+        # 40% chance to continue
+        return random.random() < 0.4
+    else:
+        # Made 3+ calls - usually has enough information
+        # Rarely continues (10% chance)
+        # This is where guardrails would catch runaway agents
+        return random.random() < 0.1
+
+
+def _generate_tool_args(tool_name: str, call_index: int) -> dict[str, str]:
+    """Generate appropriate arguments for each tool type.
+
+    Args:
+        tool_name: Name of the tool
+        call_index: Index of this call in the current batch
+
+    Returns:
+        Dictionary of tool arguments
+    """
+    if tool_name == "search_web":
+        queries = [
+            "example query",
+            "related information",
+            "additional context",
+            "verification search"
+        ]
+        return {"query": queries[call_index % len(queries)]}
+    elif tool_name == "calculate":
+        expressions = ["2 + 2", "10 * 5", "100 / 4", "7 ** 2"]
+        return {"expression": expressions[call_index % len(expressions)]}
+    elif tool_name == "get_current_time":
+        return {}
+    else:
+        return {}
 
 
 def execute_tools(state: AgentState) -> dict[str, Any]:
@@ -391,7 +486,7 @@ Options: approve, reject, or modify the request.
 # ============================================================================
 def should_continue(
     state: AgentState,
-) -> Literal["execute_tools", "check_guardrails", "end"]:
+) -> Literal["execute_tools", "end"]:
     """Determine next step based on the last message.
 
     Args:
@@ -405,15 +500,24 @@ def should_continue(
     metrics = get_metrics(state)
 
     logger.debug(
-        f"Routing decision. Last message type: {type(last_message).__name__}",
+        f"Routing decision. Last message type: {type(last_message).__name__}, "
+        f"Tool calls this turn: {metrics.tool_calls_this_turn}",
         extra={"trace_id": metrics.trace_id},
     )
 
     # If last message has tool calls, execute them
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        logger.debug(
+            f"Routing to execute_tools. Number of tool calls: {len(last_message.tool_calls)}",
+            extra={"trace_id": metrics.trace_id},
+        )
         return "execute_tools"
 
     # Otherwise, we're done
+    logger.debug(
+        "No tool calls detected. Routing to end.",
+        extra={"trace_id": metrics.trace_id},
+    )
     return "end"
 
 
