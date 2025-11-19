@@ -54,14 +54,20 @@ graph TD
 
 ### Installation
 
+#### Env Setup
+copy `.env.example` to `.env` and update values
+
+#### Install dependencies
+
 ```bash
-# Install dependencies
 pip install -e .
 
 # OR with dev(to test) and llm
 pip install -e '.[dev,llm]'
+```
 
-# Start the server
+##### Start the server
+```bash
 langgraph dev
 ```
 
