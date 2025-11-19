@@ -1,1 +1,1 @@
-"""Define any integration tests you want in this directory."""
+"""Integration tests for the tool-calling agent with guardrails."""
